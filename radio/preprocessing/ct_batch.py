@@ -355,8 +355,12 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
         # if ndarray
         if fmt == 'ndarray':
             self._init_data(bounds=bounds, **kwargs)
+        # updated call to include files flag
         elif fmt == 'dicom':
-            self._load_dicom()              # pylint: disable=no-value-for-parameter
+            self._load_dicom(files=False)              # pylint: disable=no-value-for-parameter
+        # new code
+        elif fmt == 'dicom_with_filenames':
+            self._load_dicom(files=True)
         elif fmt == 'blosc':
             components = self.components if components is None else components
             # convert components_blosc to iterable
@@ -380,10 +384,47 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
         # put 2d-scans for each patient in a list
         patient_pos = self.index.get_pos(patient_id)
         patient_folder = self.index.get_fullpath(patient_id)
-        list_of_dicoms = [dicom.read_file(os.path.join(patient_folder, s))
-                          for s in os.listdir(patient_folder)]
+        list_of_dicoms = []
+        list_of_filenames = []
 
+        # for testing purposes, want to pass in a list here
+        #for s in os.listdir(patient_folder):
+        test_list = ['ser002img00451.dcm',
+                     'ser002img00452.dcm',
+                     'ser002img00453.dcm',
+                     'ser002img00454.dcm',
+                     'ser002img00455.dcm',
+                     'ser002img00456.dcm',
+                     'ser002img00457.dcm',
+                     'ser002img00458.dcm',
+                     'ser002img00459.dcm',
+                     'ser002img00460.dcm']
+        for s in test_list:
+            print('Adding dicom file '+s)
+            list_of_dicoms.append(dicom.read_file(os.path.join(patient_folder, s)))
+            list_of_filenames.append(os.path.join(patient_folder, s))
+        
+        '''
+        original code
+        list_of_dicoms = [dicom.read_file(os.path.join(patient_folder, s))
+                      for s in os.listdir(patient_folder)]
         list_of_dicoms.sort(key=lambda x: int(x.ImagePositionPatient[2]), reverse=True)
+        '''
+
+        # want to get list of indices to sort the list of dicoms and filenames
+        # TODO: make sure this is correct sorting
+        print('Beginning sort')
+        sorted_indices = [x[0] for x in sorted(enumerate(list_of_dicoms),
+                                               key=lambda x:int(x[1].ImagePositionPatient[2]), reverse=True)]
+
+        list_of_dicoms = [list_of_dicoms[i] for i in sorted_indices]
+
+        # if we pass in files=True, want to get and sort a list of filenames
+        if 'files' in kwargs and kwargs['files']:
+            list_of_filenames = [list_of_filenames[i] for i in sorted_indices]
+            self.filenames = list_of_filenames
+
+        print('Completed sort')
 
         dicom_slice = list_of_dicoms[0]
         intercept_pat = dicom_slice.RescaleIntercept
