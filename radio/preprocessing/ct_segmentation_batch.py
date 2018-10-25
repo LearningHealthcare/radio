@@ -25,6 +25,7 @@ search_for_no_dvt = ['ePAD DSO-NO DVT',
                      'ePAD DSO-NO  DVT',
                      'ePAD DSO-NI DVT',
                      'ePAD DSO-noDVT',
+                     'ePAD DSO-NO DVT',
                      'ePAD DSO-NO DVT']
 
 class CTImagesSegmentationBatch(CTImagesMaskedBatch):
@@ -83,12 +84,12 @@ class CTImagesSegmentationBatch(CTImagesMaskedBatch):
                 continue
             else:
                 # check if the label says no DVT is present. If not, continue, we don't want to
-                if d['label'][j] in search_for_no_dvt:
+                if any(s in d['label'][j] for s in search_for_no_dvt):
                     continue
                 # check if the label says DVT is present. If so,
                 elif 'ePAD DSO-DVT' in d['label'][j]:
                     slice_number = d['slice_number'][j]
-                    #print('reading segmentation file: ' + segmentation)
+                    print('reading segmentation file: ' + segmentation)
                     segmentation_dcm = dicom.dcmread(os.path.join(self.segmentation_path, segmentation))
                     segmentation_mask = segmentation_dcm.pixel_array[slice_number]
                     # check to make sure segmentation exists
@@ -100,6 +101,9 @@ class CTImagesSegmentationBatch(CTImagesMaskedBatch):
                         self.masks[i] = self.masks[i] + segmentation_mask
                     else:
                         print("ERROR: Segmentation mask size is off. "+str(segmentation_mask.shape))
+                elif 'ePAD DSO-Lesion' in d['label'][j]:
+                    # if we hit this case, continue. I'm not sure what this means for now
+                    continue
                 else:
                     print("ERROR: weird label"+d['label'][j])
 
