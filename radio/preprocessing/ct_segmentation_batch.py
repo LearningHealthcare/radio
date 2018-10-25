@@ -17,6 +17,15 @@ logger = logging.getLogger(__name__) # pylint: disable=invalid-name
 
 AIR_HU = -2000
 DARK_HU = -2000
+search_for_no_dvt = ['ePAD DSO-NO DVT',
+                     'ePAD DSO-NODVT',
+                     'ePAD DSO-no DVT',
+                     'ePAD DSO- NO DVT',
+                     'ePAD DSO-NO DNT',
+                     'ePAD DSO-NO  DVT',
+                     'ePAD DSO-NI DVT',
+                     'ePAD DSO-noDVT',
+                     'ePAD DSO-NO DVT']
 
 class CTImagesSegmentationBatch(CTImagesMaskedBatch):
     """ Batch class for storing batch of ct-scans with masks based on segmentations
@@ -59,6 +68,41 @@ class CTImagesSegmentationBatch(CTImagesMaskedBatch):
         super().__init__(index, *args, **kwargs)
         self.masks = None
 
+    def extract_mask(self, reference_image_filename, i):
+        # get the dictionary for this CT slice if the it's in the map. if not, return immediately
+        if reference_image_filename in self.segmentation_map.keys():
+            d = self.segmentation_map[reference_image_filename]
+        else:
+            return
+
+        # loop through the list of segmentations for this CT slice
+        for j in range(0, len(d['segmentation_file'])):
+            segmentation = d['segmentation_file'][j]
+            # if the segmentation is blank, want to skip it
+            if segmentation == '':
+                continue
+            else:
+                # check if the label says no DVT is present. If not, continue, we don't want to
+                if d['label'][j] in search_for_no_dvt:
+                    continue
+                # check if the label says DVT is present. If so,
+                elif 'ePAD DSO-DVT' in d['label'][j]:
+                    slice_number = d['slice_number'][j]
+                    #print('reading segmentation file: ' + segmentation)
+                    segmentation_dcm = dicom.dcmread(os.path.join(self.segmentation_path, segmentation))
+                    segmentation_mask = segmentation_dcm.pixel_array[slice_number]
+                    # check to make sure segmentation exists
+                    if segmentation_mask is None or segmentation_mask == '':
+                        print('Segmentation file found with no segmentation mask. No mask saved')
+                        continue
+                    # finally add legitimate segmentation masks
+                    if self.masks[i].shape == segmentation_mask.shape:
+                        self.masks[i] = self.masks[i] + segmentation_mask
+                    else:
+                        print("ERROR: Segmentation mask size is off. "+str(segmentation_mask.shape))
+                else:
+                    print("ERROR: weird label"+d['label'][j])
+
     @action
     def create_mask(self):
         """ Create `masks` component from dictionary
@@ -74,26 +118,14 @@ class CTImagesSegmentationBatch(CTImagesMaskedBatch):
                            "and be set before calling this method. " +
                            "Nothing happened.")
 
+        # initialize masks to be all 0s
         self.masks = np.zeros_like(self.images)
 
         # use filenames to read in segmentation from annotations
         for i in range(0, len(self.images)):
-            print('checking for segmentation file for index #'+str(i))
-            # some slices will have no segmentations. need to handle that case
-            segmentation_file = self.segmentation_map[self.filenames[i]]['segmentation_file']
-            if segmentation_file == '':
-                continue
-            else:
-                slice_number = self.segmentation_map[self.filenames[i]]['slice_number']
-                print('reading segmentation file: '+segmentation_file)
-                segmentation_dcm = dicom.dcmread(os.path.join(self.segmentation_path, segmentation_file))
-                segmentation = segmentation_dcm.pixel_array[slice_number]
-                # check to make sure segmentation exists
-                if segmentation is None or segmentation == '':
-                    logger.log('Segmentation file found with no segmentation. No mask saved')
-                    continue
-                # finally add legitimate segmentations. The rest will be 0s
-                self.masks[i] = segmentation
+            mask = self.extract_mask(self.filenames[i], i)
+            #print('checking for segmentation file for slice #'+str(i))
+
         print('completed loading masks for current batch')
         return self
 
