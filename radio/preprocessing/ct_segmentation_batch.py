@@ -48,15 +48,13 @@ class CTImagesSegmentationBatch(CTImagesMaskedBatch):
             contains ct-scans for all patients in batch.
         masks : ndarray
             contains masks for all patients in batch.
-        filenames : ndarray
-            contains list of filenames for dicom images (ct-scans)
         segmentation_path : basestring
             defines that path where we will look for segmentations
         segmentation_map : dictionary
             contains a map of image filename to segmentation filename
         """
 
-    components = "images", "masks", "spacing", "origin", "filenames", "segmentation_path", "segmentation_map"
+    components = "images", "masks", "spacing", "origin", "segmentation_path", "segmentation_map"
 
     def __init__(self, index, *args, **kwargs):
         """ Execute Batch construction and init of basic attributes
@@ -127,8 +125,8 @@ class CTImagesSegmentationBatch(CTImagesMaskedBatch):
 
         # use filenames to read in segmentation from annotations
         for i in range(0, len(self.images)):
-            mask = self.extract_mask(self.filenames[i], i)
-            #print('checking for segmentation file for slice #'+str(i))
+            self.extract_mask(self.filenames[i], i)
+            pass
 
         print('completed loading masks for current batch')
         return self

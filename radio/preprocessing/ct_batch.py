@@ -63,9 +63,11 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
         represents distances between pixels in world coordinates
     origin : ndarray of floats
         contains world coordinates of (0, 0, 0)-pixel of scans
+    filenames : ndarray
+        contains list of filenames for dicom images (ct-scans)
     """
 
-    components = "images", "spacing", "origin"
+    components = "images", "spacing", "origin", "filenames"
 
     def __init__(self, index, *args, **kwargs):
         """ Execute Batch construction and init of basic attributes
@@ -83,9 +85,11 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
         self._bounds = None
         self.origin = None
         self.spacing = None
+        self.filenames = None
         self._init_data(spacing=np.ones(shape=(len(self), 3)),
                         origin=np.zeros(shape=(len(self), 3)),
-                        bounds=np.array([], dtype='int'))
+                        bounds=np.array([], dtype='int'),
+                        filenames=[None]*len(self))
 
     def _if_component_filled(self, component):
         """ Check if component is filled with data.
@@ -360,6 +364,8 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
         # new code
         elif fmt == 'dicom_with_filenames':
             self._load_dicom(files=True)
+        elif fmt == 'slices_with_filenames':
+            self._load_slices(files=True)
         elif fmt == 'blosc':
             components = self.components if components is None else components
             # convert components_blosc to iterable
@@ -383,21 +389,14 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
         # put 2d-scans for each patient in a list
         patient_pos = self.index.get_pos(patient_id)
         patient_folder = self.index.get_fullpath(patient_id)
-        placeholder_list = []
         list_of_dicoms = []
         list_of_filenames = []
 
         for s in os.listdir(patient_folder):
             print('Adding dicom file '+os.path.join(patient_folder, s))
+            # each dicom and filename pair should end up in the same location. will sort later
             list_of_dicoms.append(dicom.read_file(os.path.join(patient_folder, s)))
             list_of_filenames.append(os.path.join(patient_folder, s))
-        
-        '''
-        original code
-        list_of_dicoms = [dicom.read_file(os.path.join(patient_folder, s))
-                      for s in os.listdir(patient_folder)]
-        list_of_dicoms.sort(key=lambda x: int(x.ImagePositionPatient[2]), reverse=True)
-        '''
 
         # want to get list of indices to sort the list of dicoms and filenames
         # TODO: make sure this is correct sorting
@@ -410,7 +409,6 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
         # if we pass in files=True, want to get and sort a list of filenames
         if 'files' in kwargs and kwargs['files']:
             list_of_filenames = [list_of_filenames[i] for i in sorted_indices]
-            self.filenames = list_of_filenames
 
         #print('Completed sort')
 
@@ -436,7 +434,40 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
             patient_data = patient_data.astype(np.int16)
 
         patient_data += np.int16(intercept_pat)
-        return patient_data
+        return patient_data, list_of_filenames
+
+    @inbatch_parallel(init='indices', post='_post_default', target='threads')
+    def _load_slices(self, patient_id, **kwargs):
+        """ Read dicom file, load single slice and convert to Hounsfield Units (HU).
+        NOTE: if we do this, we will not be able to legitimately use 3D image to normalize 
+
+        Notes
+        -----
+        Conversion to hounsfield unit scale using meta from dicom-scans is performed.
+        """
+        # current index should give an individual file. initialize useful variables
+        slice_pos = self.index.get_pos(patient_id)
+        slice_filepath = self.index.get_fullpath(patient_id)
+
+        # read dicom information and store filenames
+        print('Adding dicom file ' + os.path.join(slice_filepath))
+        dcm = dicom.read_file(slice_filepath)
+
+        data = np.stack([dcm.pixel_array.astype(np.int16)])
+
+        #data[data == AIR_HU] = 0
+
+        # perform conversion to HU
+        intercept_pat = dcm.RescaleIntercept
+        slope_pat = dcm.RescaleSlope
+        if slope_pat != 1:
+            data = slope_pat * data.astype(np.float64)
+            data = data.astype(np.int16)
+
+        data += np.int16(intercept_pat)
+
+        # slice_filepath needs to be a list for _post_default
+        return data, [slice_filepath]
 
     def _prealloc_skyscraper_components(self, components, fmt='blosc'):
         """ Read shapes of skyscraper-components dumped with blosc,
@@ -813,13 +844,13 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
             all_errors = self.get_errors(worker_outputs)
             raise RuntimeError("Failed parallelizing. Some of the workers failed with following errors: ", all_errors)
 
-    def _post_default(self, list_of_arrs, update=True, new_batch=False, **kwargs):
-        """ Gatherer outputs of different workers, update `images` component
+    def _post_default(self, return_tuple, update=True, new_batch=False, **kwargs):
+        """ Gatherer outputs of different workers, update `images` component and 'filenames' component
 
         Parameters
         ----------
         list_of_arrs : list
-            list of ndarrays to be concated and put in a batch.images.
+            tuple with list of ndarrays to be concated and put in a batch.images and list of filenames.
         update : bool
             if False, nothing is performed.
         new_batch : bool
@@ -835,13 +866,21 @@ class CTImagesBatch(Batch):  # pylint: disable=too-many-public-methods
         -----
         Output of each worker should correspond to individual patient.
         """
+        # extract filenames.
+        # TODO: this might have memory implications
+        filenames = []
+        list_of_arrs = []
+        for i in return_tuple:
+            list_of_arrs.append(i[0])
+            filenames = filenames + i[1]
         self._reraise_worker_exceptions(list_of_arrs)
         res = self
         if update:
             new_data = np.concatenate(list_of_arrs, axis=0)
             new_bounds = np.cumsum(np.array([len(a) for a in [[]] + list_of_arrs]))
             params = dict(images=new_data, bounds=new_bounds,
-                          origin=self.origin, spacing=self.spacing)
+                          origin=self.origin, spacing=self.spacing,
+                          filenames=filenames)
             if new_batch:
                 batch = type(self)(self.index)
                 batch.load(fmt='ndarray', **params)
