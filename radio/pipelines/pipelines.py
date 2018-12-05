@@ -89,8 +89,8 @@ def get_crops(nodules, fmt='raw', nodule_shape=(32, 64, 64), batch_size=20, shar
 
     return pipeline
 
-
-def split_dump(cancer_path, non_cancer_path, nodules, histo=None, fmt='raw',
+# note: Andre removed "nodules" from this function signature because we fetch directly from the segmentations
+def split_dump(cancer_path, non_cancer_path, histo=None, fmt='raw',
                nodule_shape=(32, 64, 64), variance=(36, 144, 144), **kwargs):
     """ Get pipeline for dumping cancerous crops in one folder and random noncancerous crops in another.
 
@@ -147,9 +147,11 @@ def split_dump(cancer_path, non_cancer_path, nodules, histo=None, fmt='raw',
     # 2) sampling and dumping of non-cancerous crops in separate actions
     pipeline = (Pipeline()
                 .load(fmt=fmt)
-                .fetch_nodules_info(nodules=nodules)
+                # commenting this out because we get nodule info from modules - Andre
+                #.fetch_nodules_info(nodules=nodules)
                 .unify_spacing(**args_unify_spacing)
                 .create_mask()
+                .fetch_nodules_from_mask()
                 .sample_dump(**args_dump_cancer)  # sample and dump cancerous crops
                 .sample_nodules(**args_sample_ncancer)  # sample non-cancerous
                 .dump(dst=non_cancer_path)  # dump non-cancerous
